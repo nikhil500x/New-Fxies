@@ -176,7 +176,7 @@ End Sub
 '--- 3. loose copies of the payload elsewhere --------------------
 Sub SweepStrayDrops()
     Say "[3] Stray Lo.zip / setup1.vbs in common drop locations"
-    Dim places, i, d, f, hit
+    Dim places, i, d, f, hit, seen, lc
     hit = 0
     places = Array( _
         sh.ExpandEnvironmentStrings("%TEMP%"), _
@@ -185,8 +185,14 @@ Sub SweepStrayDrops()
         sh.ExpandEnvironmentStrings("%APPDATA%"), _
         sh.ExpandEnvironmentStrings("%LOCALAPPDATA%"))
 
+    ' de-duplicate overlapping env dirs (mirrors the PS1 Select -Unique) so a
+    ' drop is not counted or quarantined twice
+    seen = "|"
     For i = 0 To UBound(places)
-        If places(i) <> "" And fso.FolderExists(places(i)) Then
+        lc = LCase(places(i))
+        If places(i) <> "" And fso.FolderExists(places(i)) _
+           And InStr(seen, "|" & lc & "|") = 0 Then
+            seen = seen & lc & "|"
             On Error Resume Next
             Set d = fso.GetFolder(places(i))
             For Each f In d.Files
@@ -226,13 +232,14 @@ End Sub
 
 '--- 5. certutil URL cache ---------------------------------------
 Sub ClearCertutilCache()
-    Say "[5] certutil URL cache entry"
+    Say "[5] certutil URL cache entry (preventive flush)"
     If DoFix Then
         RunCapture "certutil.exe -urlcache " & BAD_URL & " delete"
-        Say "    -> delete issued for " & BAD_URL
-        gActed = gActed + 1
+        ' Best-effort cache flush: certutil gives no reliable cross-locale signal
+        ' of whether an entry existed, so this is NOT counted as an action.
+        Say "    -> flush issued for " & BAD_URL & " (best-effort, not counted in Actions)"
     Else
-        Say "    - would delete cache entry for " & BAD_URL
+        Say "    - would flush cache entry for " & BAD_URL
         Say "      (also check %LOCALAPPDATA%\Microsoft\Windows\INetCache)"
     End If
     Say ""
@@ -491,9 +498,16 @@ Function RunCapture(cmd)
 End Function
 
 Function IsAdmin()
-    Dim out
-    out = RunCapture("net session")
-    IsAdmin = (InStr(LCase(out), "access is denied") = 0)
+    ' Use the exit code of "net session" (0 = elevated) rather than matching the
+    ' English "access is denied" text, which fails on localized Windows.
+    Dim rc
+    rc = 1
+    On Error Resume Next
+    rc = sh.Run("cmd.exe /c net session >nul 2>&1", 0, True)
+    If Err.Number <> 0 Then rc = 1
+    Err.Clear
+    On Error GoTo 0
+    IsAdmin = (rc = 0)
 End Function
 
 Function HiveName(h)
